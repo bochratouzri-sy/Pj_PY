@@ -2,9 +2,9 @@ import pandas as pd, numpy as np
 import matplotlib.pyplot as plt, seaborn as sns
 
 sns.set_theme(style="whitegrid")
-FICHIER = "dataset_regenere.xlsx"
+FICHIER = "dataset_final_regenere.xlsx"
 
-# ---------- 0. Chargement + préparation ----------
+# ---------- Chargement + préparation ----------
 df = pd.read_excel(FICHIER)
 df["date_debut"] = pd.to_datetime(df["date_debut"])
 df["date_fin"] = pd.to_datetime(df["date_fin"])
@@ -19,7 +19,7 @@ df["classe_surface"] = pd.cut(df["superficie_m2_est"], [0, 120, 200, 400], label
 eau = df[df.ressource == "Eau"].copy()
 elec = df[df.ressource == "Electricité"].copy()
 
-# ---------- 1. Indicateurs statistiques ----------
+# ---------- Indicateurs statistiques ----------
 cols = ["conso_mensuelle", "montant_facture_dt", "conso_par_pers", "conso_par_m2"]
 for nom, d in [("EAU (SONEDE)", eau), ("ÉLECTRICITÉ (STEG)", elec)]:
     s = d[cols].describe().T
@@ -28,7 +28,7 @@ for nom, d in [("EAU (SONEDE)", eau), ("ÉLECTRICITÉ (STEG)", elec)]:
     s["asymetrie"] = d[cols].skew()
     print(f"\n===== Statistiques : {nom} (n={len(d)}) =====\n", s.round(2))
 
-# ---------- 2. Comparaison selon les profils ----------
+# ---------- Comparaison selon les profils ----------
 for nom, d in [("EAU", eau), ("ÉLEC", elec)]:
     for profil in ["gouvernorat", "taille_foyer", "classe_surface"]:
         t = d.groupby(profil, observed=True).agg(
@@ -37,14 +37,14 @@ for nom, d in [("EAU", eau), ("ÉLEC", elec)]:
             facture_moy=("montant_facture_dt", "mean")).round(2)
         print(f"\n--- {nom} par {profil} ---\n", t)
 
-# ---------- 3. Relations entre variables ----------
+# ---------- Relations entre variables ----------
 num = ["superficie_m2_est", "nb_personnes_est", "conso_mensuelle", "montant_facture_dt"]
 corr_eau = eau[num].corr(method="spearman")
 print("\nCorrélations (Spearman) - EAU\n", corr_eau.round(2))
 if len(elec) > 5:
     print("\nCorrélations (Spearman) - ÉLEC\n", elec[num].corr(method="spearman").round(2))
 
-# ---------- 4. Consommations inhabituelles ----------
+# ---------- Consommations inhabituelles ----------
 def outliers_iqr(d, col="conso_mensuelle"):
     q1, q3 = d[col].quantile([.25, .75])
     return (d[col] < q1 - 1.5 * (q3 - q1)) | (d[col] > q3 + 1.5 * (q3 - q1))
@@ -65,7 +65,7 @@ print(" - conso = 0            :", (df.conso_mensuelle == 0).sum())
 print(" - dates futures (>auj.):", (df.date_debut > pd.Timestamp.today()).sum())
 print(" - périodes != 3 mois   :", (df.nb_mois != 3).sum())
 
-# ---------- 5. Visualisation ----------
+# ---------- Visualisation ----------
 fig, ax = plt.subplots(2, 3, figsize=(18, 10))
 sns.histplot(eau.conso_mensuelle, bins=40, kde=True, ax=ax[0, 0]).set(title="Distribution conso eau (m³/mois)")
 sns.boxplot(data=eau, x="gouvernorat", y="conso_mensuelle", ax=ax[0, 1]).set(title="Eau par gouvernorat")
