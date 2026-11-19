@@ -1,8 +1,6 @@
-"""
-Interface web (Streamlit).   Lancement :  streamlit run app.py
+"""Interface web (Streamlit).   Lancement :  streamlit run app.py
 
-Aucune logique de modèle ici : tout vient de
-  donnees.py (données), fonctions.py (fonction1/2/3), collecte.py (enregistrement).
+Aucune logique de modèle ici : donnees.py (données), fonctions.py (fonction1/2/3), collecte.py (enregistrement).
 """
 import io
 import os
@@ -11,36 +9,31 @@ import unicodedata
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.ticker import MaxNLocator
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 import streamlit as st
 
-st.set_page_config(page_title="Suivi de consommation", page_icon="💧", layout="wide")
+st.set_page_config(page_title="Suivi de consommation", page_icon="logo.png", layout="wide")
 
-from donnees import D, GOUV, UNITE, df as DF_PROPRE
-from fonctions import fonction1, fonction2, fonction3, MOIS
+from donnees import D, GOUV, UNITE
+from fonctions import fonction1, fonction2, fonction4, MOIS
 from collecte import ajouter_foyer, FOURNISSEUR, FICHIER_SAISIES, dossier_utilisateur
 
 RESSOURCES = list(D.keys())                     # ["Eau", "Electricité"]
-DEFAUTS = {"Eau": dict(ancien=1000.0, actuel=1040.0, prec="40"), "Electricité": dict(ancien=5000.0, actuel=5240.0, prec="360")}
-          
-
-# Palette 
-BLEU = "#17365D"       
-ACCENT = "#2874A6"      # couleur principale (boutons, cartes)
+DEFAUTS = {"Eau": dict(ancien=1000.0, actuel=1040.0, prec=""),
+           "Electricité": dict(ancien=5000.0, actuel=5240.0, prec="")}
+BLEU, ACCENT = "#17365D", "#2874A6"
 VERT, ORANGE, BRUN = "#1e8e3e", "#d97706", "#b45309"
-# Une couleur par graphique 
-C_GOUV, C_PERS, C_SURF, C_MOIS, C_HIST, C_FACT = "#2874A6", "#1e8e3e", "#d97706", "#7e57c2", "#00897b", "#17365D"
 COULEUR_NIVEAU = {"économe": VERT, "normal": VERT, "élevé": ORANGE, "gros consommateur": BRUN}
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-# Style : 
+OBLIGATOIRES = ["ressource", "gouvernorat", "nb_personnes", "superficie_m2", "index_ancien", "index_actuel"]
+FACULTATIVES = ["nb_mois", "date_debut", "date_fin", "jours_ecoules", "mois_actuel", "conso_precedente", "budget"]
 
 st.markdown(f"""
 <style>
 #MainMenu, footer {{visibility: hidden;}}
 .block-container {{padding-top: 1.5rem; max-width: 1100px;}}
-.bandeau {{background: {BLEU}; color: white; padding: 22px 16px; border-radius: 12px;text-align: center; margin-bottom: 14px;}}
+.bandeau {{background: {BLEU}; color: white; padding: 22px 16px; border-radius: 12px; text-align: center; margin-bottom: 14px;}}
 .bandeau h1 {{color: white; margin: 0; padding: 0; font-size: 2rem;}}
 .bandeau p {{color: white; opacity: .85; margin: 4px 0 0 0;}}
 .carte {{border: 1px solid rgba(128,128,128,.3); border-left: 5px solid {ACCENT}; border-radius: 12px;
@@ -49,15 +42,16 @@ st.markdown(f"""
 .carte .v {{font-size: 1.7rem; font-weight: 700; line-height: 1.2;}}
 .carte .s {{font-size: .85rem; opacity: .75; margin-top: 4px;}}
 .badge {{display: inline-block; padding: 3px 12px; border-radius: 999px; color: white; font-weight: 600;}}
-.alerte {{border-left: 5px solid; border-radius: 6px; padding: 10px 14px; margin: 8px 0;
-         background: rgba(128,128,128,.07);}}
+.alerte {{border-left: 5px solid; border-radius: 6px; padding: 10px 14px; margin: 8px 0; background: rgba(128,128,128,.07);}}
 .phrase {{font-size: 1.1rem; margin: 6px 0 14px 0;}}
 </style>""", unsafe_allow_html=True)
 
 
-def carte(titre, valeur, sous=""):
-    st.markdown(f'<div class="carte"><div class="t">{titre}</div><div class="v">{valeur}</div>'
-                f'<div class="s">{sous}</div></div>', unsafe_allow_html=True)
+def cartes(*items):
+    """Affiche des cartes côte à côte : chaque élément = (titre, valeur, sous-titre)."""
+    for col, (titre, valeur, sous) in zip(st.columns(len(items)), items):
+        col.markdown(f'<div class="carte"><div class="t">{titre}</div><div class="v">{valeur}</div>'
+                     f'<div class="s">{sous}</div></div>', unsafe_allow_html=True)
 
 
 def en_xlsx(tableau, feuille="Donnees"):
@@ -73,112 +67,157 @@ def normaliser_ressource(txt):
     return {"eau": "Eau", "electricite": "Electricité"}.get(t)
 
 
+def valeur(row, nom):
+    """Valeur d'une colonne facultative, ou None si la colonne est absente ou la cellule vide."""
+    v = row.get(nom, np.nan)
+    return None if pd.isna(v) else v
 
-# Analyse d'un foyer 
 
-def analyser(r, gouv, pers, surface, ancien, actuel, jours, mois, precedente=None):
-    if jours <= 0:
-        raise ValueError("Le nombre de jours doit être supérieur à zéro.")
-    if actuel < ancien:
-        raise ValueError("L'index actuel doit être supérieur ou égal à l'index ancien.")
-    if pers <= 0 or surface <= 0:
-        raise ValueError("Le nombre de personnes et la surface doivent être positifs.")
-    if precedente is not None and precedente < 0:
-        raise ValueError("La consommation précédente ne peut pas être négative.")
-    r1 = fonction1(r, ancien, actuel, jours)
-    conso_mensuelle = round(r1["conso_projetee_periode"] / 3, 1)
-    r2 = fonction2(r, pers, surface, gouv, conso_mensuelle)
-    precedente_mensuelle = (precedente / 3 if precedente is not None else None)
-    r3 = fonction3(r, pers, surface, gouv, conso_mensuelle, mois, precedente_mensuelle)
-    return {"r": r, "gouv": gouv, "pers": pers, "surface": surface, "r1": r1, "r2": r2, "r3": r3,
-            "ancien": ancien, "actuel": actuel, "jours": jours}
+def analyser(r, gouv, pers, surface, ancien, actuel, jours, mois, precedente=None, nb_mois=3, budget=None):
+    """Vérifie les saisies puis appelle les fonctions du projet (1 : facture, 2 : normal + alertes, 4 : budget)."""
+    for erreur, message in [(jours <= 0, "Le nombre de jours doit être supérieur à zéro."),
+                            (actuel < ancien, "L'index actuel doit être supérieur ou égal à l'index ancien."),
+                            (pers <= 0 or surface <= 0, "Le nombre de personnes et la surface doivent être positifs."),
+                            (precedente is not None and precedente < 0, "La consommation précédente ne peut pas être négative."),
+                            (budget is not None and budget <= 0, "Le budget doit être supérieur à zéro.")]:
+        if erreur:
+            raise ValueError(message)
+    r1 = fonction1(r, ancien, actuel, jours, nb_mois)
+    conso_mensuelle = round(r1["conso_projetee_periode"] / nb_mois, 1)
+    r2 = fonction2(r, pers, surface, gouv, conso_mensuelle, precedente / nb_mois if precedente is not None else None, nb_mois)
+    r4 = fonction4(r, budget, r1["conso_projetee_periode"], nb_mois) if budget is not None else None
+    return {"r": r, "gouv": gouv, "pers": pers, "surface": surface, "r1": r1, "r2": r2, "r4": r4,
+            "ancien": ancien, "actuel": actuel, "jours": jours, "mois": mois, "nb_mois": nb_mois}
+
+
+MOIS_COURT = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
+
+
+def historique_foyer(r, gouv, pers, surface, exclure=None):
+    """Analyses déjà enregistrées pour ce foyer (même ressource, gouvernorat, nombre de personnes et surface).
+    `exclure` = (index_ancien, index_actuel, jours, mois) de l'analyse en cours, pour ne pas la compter deux fois."""
+    chemin = os.path.join(dossier_utilisateur(), FICHIER_SAISIES)
+    if not os.path.exists(chemin):
+        return pd.DataFrame(columns=["mois", "conso_mensuelle"])
+    h = pd.read_csv(chemin)
+    h = h[(h.ressource == r) & (h.gouvernorat == gouv) & (h.nb_personnes == pers) & (h.superficie_m2 == surface)]
+    h = h.drop_duplicates(["index_ancien", "index_actuel", "jours_ecoules", "mois"], keep="last")
+    if exclure is not None:
+        h = h[~((h.index_ancien == exclure[0]) & (h.index_actuel == exclure[1])
+                & (h.jours_ecoules == exclure[2]) & (h.mois == exclure[3]))]
+    return h.assign(conso_mensuelle=(h.index_actuel - h.index_ancien) / h.jours_ecoules * 30)
+
+
+def graphique_historique(res):
+    """Consommation du foyer mois par mois : analyses précédentes enregistrées + analyse actuelle."""
+    r, u = res["r"], UNITE[res["r"]]
+    h = historique_foyer(r, res["gouv"], res["pers"], res["surface"],
+                         exclure=(res["ancien"], res["actuel"], res["jours"], res["mois"])).tail(7)
+    noms = [MOIS_COURT[int(m) - 1] for m in h.mois] + ["Maintenant"]
+    valeurs = list(h.conso_mensuelle) + [res["r2"]["ma_conso"]]
+    fig, ax = plt.subplots(figsize=(7, 3))
+    ax.bar(range(len(valeurs)), valeurs, color=[ACCENT] * (len(valeurs) - 1) + [ORANGE])
+    ax.axhline(res["r2"]["foyers_semblables"], color="gray", linestyle="--", linewidth=1.5)
+    ax.set_xticks(range(len(valeurs)), noms)
+    ax.set_ylabel(f"{u} par mois")
+    ax.set_ylim(0, max(valeurs + [res["r2"]["foyers_semblables"]]) * 1.35)
+    ax.set_title("Votre consommation, mois par mois", fontsize=11)
+    ax.legend(handles=[Patch(color=ACCENT, label="Mois précédents"), Patch(color=ORANGE, label="Maintenant"),
+                       Line2D([0], [0], color="gray", linestyle="--", label="Foyers semblables")],
+              fontsize=8, frameon=False, loc="upper left", ncol=3)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+    if len(h) == 0:
+        st.caption("Première analyse de ce foyer : vos mois précédents apparaîtront ici à chaque nouvelle analyse enregistrée.")
 
 
 def afficher_resultats(res, cle="saisie"):
-    r, u = res["r"], UNITE[res["r"]]
-    r1, r2, r3 = res["r1"], res["r2"], res["r3"]
-    niveau = r2["niveau"]
+    r, u, nm = res["r"], UNITE[res["r"]], res["nb_mois"]
+    r1, r2, r4 = res["r1"], res["r2"], res["r4"]
+    fourchette = f"entre {r1['facture_min_DT']} et {r1['facture_max_DT']} DT"
 
-    st.markdown(f"### Résultats : {r} ({FOURNISSEUR.get(r, '')}), {res['gouv']}, "
-                f"{res['pers']} pers., {res['surface']} m²")
+   ## st.markdown(f"### Résultats : {r} ({FOURNISSEUR.get(r, '')}), {res['gouv']}, {res['pers']} pers., {res['surface']} m²")
 
-    # 1. Où j'en suis ?
     st.markdown("#### 1. Où j'en suis ?")
     st.markdown(f'<div class="phrase">À ce rythme, vous consommerez <b>{r1["conso_projetee_periode"]} {u}</b> '
-                f'sur 3 mois et paierez environ <b>{r1["facture_estimee_DT"]} DT</b>.</div>', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        carte("Consommation projetée", f"{r1['conso_projetee_periode']} {u}", "sur 3 mois")
-    with c2:
-        carte("Facture estimée", f"{r1['facture_estimee_DT']} DT", "sur 3 mois")
-    with c3:
-        carte("Économie si -10 %", f"{r1['economie_si_-10%_DT']} DT", "en réduisant votre consommation")
+                f'sur {nm} mois et paierez environ <b>{r1["facture_estimee_DT"]} DT</b> ({fourchette}).</div>',
+                unsafe_allow_html=True)
+    cartes(("Consommation projetée", f"{r1['conso_projetee_periode']} {u}", f"sur {nm} mois"),
+           ("Facture estimée", f"{r1['facture_estimee_DT']} DT", fourchette),
+           ("Économie si -10 %", f"{r1['economie_si_-10%_DT']} DT", "en réduisant votre consommation"))
 
-    # 2. Est-ce que je consomme normalement ?
     st.markdown("#### 2. Est-ce que je consomme normalement ?")
-    couleur = COULEUR_NIVEAU.get(niveau, ACCENT)
+    couleur = COULEUR_NIVEAU.get(r2["niveau"], ACCENT)
     st.markdown(f'Les foyers semblables consomment <b>{r2["foyers_semblables"]} {u}/mois</b>, '
                 f'vous <b>{r2["ma_conso"]} {u}/mois</b> : <span class="badge" style="background:{couleur}">'
-                f'{niveau}</span>', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        carte("Foyers semblables", f"{r2['foyers_semblables']} {u}", "par mois")
-    with c2:
-        carte("Vous", f"{r2['ma_conso']} {u}", "par mois")
-    with c3:
-        carte("Objectif", f"{r2['objectif']} {u}", "par mois")
+                f'{r2["niveau"]}</span>', unsafe_allow_html=True)
+    cartes(("Foyers semblables", f"{r2['foyers_semblables']} {u}", "par mois"),
+           ("Vous", f"{r2['ma_conso']} {u}", "par mois"),
+           ("Objectif", f"{r2['objectif']} {u}", "par mois"))
 
-    # 3. Dois-je faire attention ?
-    st.markdown("#### 3. Dois-je faire attention ?")
-    for a in r3:
-        if "Anomalie" in a or "Rupture" in a:
-            c = BRUN
-        elif "Pic" in a:
-            c = ORANGE
-        else:
-            c = VERT
+    for a in r2["alertes"]:
+        c = BRUN if a.strip().startswith("Attention") else ORANGE if a.strip().startswith("Économie") else VERT
         st.markdown(f'<div class="alerte" style="border-color:{c}">{a.strip()}</div>', unsafe_allow_html=True)
+    graphique_historique(res)
 
-    # Simulateur d'économie : réutilise uniquement fonction1 avec une consommation réduite
+    if r4:
+        st.markdown("#### 3. Mon budget")
+        cartes(("Votre budget", f"{r4['budget']:g} DT", f"sur {nm} mois"),
+               ("Facture estimée", f"{r4['facture']} DT", fourchette),
+               ("Dépassement" if r4["depasse"] else "Il vous reste", f"{r4['ecart_DT']} DT",
+                "à réduire" if r4["depasse"] else "sous votre budget"))
+        st.markdown(f'<div class="alerte" style="border-color:{BRUN if r4["depasse"] else VERT}">{r4["message"]}</div>',
+                    unsafe_allow_html=True)
+
     st.markdown("#### Simulateur d'économie")
     pct = st.slider("Et si je réduis ma consommation de :", 0, 50, 10, step=5, format="%d %%", key=f"sim_{cle}")
     reduit = fonction1(r, res["ancien"], res["ancien"] + (res["actuel"] - res["ancien"]) * (1 - pct / 100),
-                       res["jours"])
+                       res["jours"], nm)
     eco = round(r1["facture_estimee_DT"] - reduit["facture_estimee_DT"], 1)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        carte(f"Consommation avec -{pct} %", f"{reduit['conso_projetee_periode']} {u}", "sur 3 mois")
-    with c2:
-        carte("Nouvelle facture estimée", f"{reduit['facture_estimee_DT']} DT", "sur 3 mois")
-    with c3:
-        carte("Économie", f"{eco} DT", f"soit environ {round(eco * 4, 1)} DT par an")
+    cartes((f"Consommation avec -{pct} %", f"{reduit['conso_projetee_periode']} {u}", f"sur {nm} mois"),
+           ("Nouvelle facture estimée", f"{reduit['facture_estimee_DT']} DT", f"sur {nm} mois"),
+           ("Économie", f"{eco} DT", f"soit environ {round(eco * 12 / nm, 1)} DT par an"))
 
 
-# En-tête + navigation par onglets 
+def analyser_ligne(row):
+    """Analyse une ligne du fichier importé (jours et mois déduits des dates si les colonnes manquent)."""
+    ress = normaliser_ressource(row["ressource"])
+    if ress is None:
+        raise ValueError("Ressource inconnue (Eau ou Electricité).")
+    if row["gouvernorat"] not in GOUV:
+        raise ValueError(f"Gouvernorat inconnu. Choisissez parmi : {GOUV}")
+    prec = valeur(row, "conso_precedente")
+    budget = valeur(row, "budget")
+    nb_m = int(valeur(row, "nb_mois") or 3)
+    debut, fin = (pd.to_datetime(valeur(row, c), errors="coerce") for c in ("date_debut", "date_fin"))
+    dates_ok = not (pd.isna(debut) or pd.isna(fin))
+    jours = valeur(row, "jours_ecoules")
+    jours = int(jours) if jours is not None else ((fin - debut).days if dates_ok else nb_m * 30)
+    mois = valeur(row, "mois_actuel")
+    mois = int(mois) if mois is not None else ((debut + (fin - debut) / 2).month if dates_ok else pd.Timestamp.today().month)
+    return analyser(ress, row["gouvernorat"], int(row["nb_personnes"]), float(row["superficie_m2"]),
+                    float(row["index_ancien"]), float(row["index_actuel"]), jours, mois,
+                    None if prec is None else float(str(prec).replace(",", ".")), nb_m,
+                    None if budget is None else float(str(budget).replace(",", ".")))
 
+
+# ===================== Page =====================
 st.markdown("""
 <div class="bandeau">
   <h1>Suivi de consommation</h1>
-  <p>Eau et électricité · Estimation · Comparaison · Alertes</p>
+  <p>Eau et électricité · Estimation · Comparaison · Alertes · Budget</p>
 </div>""", unsafe_allow_html=True)
 
-onglet_analyse, onglet_dash, onglet_historique = st.tabs(
-    ["Mon analyse", "Tableau de bord", "Historique"])
-
-COLONNES_IMPORT = ["ressource", "gouvernorat", "nb_personnes", "superficie_m2", "index_ancien",
-                   "index_actuel", "jours_ecoules", "mois_actuel", "conso_precedente"]
-
-
-# ONGLET 1 : MON ANALYSE
+onglet_analyse, onglet_historique = st.tabs(["Mon analyse", "Historique"])
 
 with onglet_analyse:
     c1, c2 = st.columns(2)
     mode = c1.radio("Données du foyer", ["Saisir", "Importer un fichier"], horizontal=True)
 
-    # ---------------- saisie manuelle ----------------
     if mode == "Saisir":
-        r = c2.radio("Ressource", RESSOURCES, horizontal=True,
-                     format_func=lambda x: f"{x} ({FOURNISSEUR.get(x, '')})")
+        r = c2.radio("Ressource", RESSOURCES, horizontal=True, format_func=lambda x: f"{x} ({FOURNISSEUR.get(x, '')})")
         d = DEFAUTS.get(r, DEFAUTS["Eau"])
         with st.form("formulaire"):
             c1, c2, c3 = st.columns(3)
@@ -190,20 +229,32 @@ with onglet_analyse:
             actuel = c2.number_input("Index actuel (compteur)", value=d["actuel"], key=f"act_{r}")
             jours = c3.number_input("Jours écoulés", min_value=1, max_value=180, value=60, step=1)
             c1, c2 = st.columns(2)
-            mois = c1.selectbox("Mois actuel", list(range(1, 13)), index=7,
-                                format_func=lambda i: MOIS[i - 1].capitalize())
-            prec_txt = c2.text_input("Consommation de la période précédente (facultatif)",
-                                     value=d["prec"], key=f"prec_{r}")
+            mois = c1.selectbox("Mois actuel", list(range(1, 13)), index=7, format_func=lambda i: MOIS[i - 1].capitalize())
+            prec_txt = c2.text_input("Consommation de la période précédente (facultatif)", value=d["prec"], key=f"prec_{r}",
+                                     help="Laissez vide : l'application utilise votre dernière analyse enregistrée.")
+            nb_mois = st.selectbox("Durée de la période facturée (mois)", [1, 2, 3, 4, 6],
+                                   index=2 if r == "Eau" else 1, key=f"nm_{r}")
+            budget_txt = st.text_input("Budget maximum pour cette période, en DT (facultatif)", key=f"budget_{r}",
+                                       help="Exemple : 60. L'application dit si vous le dépasserez et de combien réduire votre consommation.")
             enregistrer = st.checkbox("Enregistrer ce foyer dans l'historique", value=True)
             envoye = st.form_submit_button("Calculer ma consommation", type="primary")
 
         if envoye:
             try:
+                try:
+                    budget = float(budget_txt.replace(",", ".")) if budget_txt.strip() != "" else None
+                except ValueError:
+                    raise ValueError("Le budget doit être un nombre (exemple : 60).")
                 precedente = float(prec_txt.replace(",", ".")) if prec_txt.strip() != "" else None
+                if precedente is None:                       # champ vide : on reprend la dernière analyse enregistrée
+                    avant = historique_foyer(r, gouv, int(pers), surface, exclure=(ancien, actuel, int(jours), mois))
+                    if len(avant):
+                        precedente = avant.conso_mensuelle.iloc[-1] * int(nb_mois)
                 st.session_state["resultat"] = analyser(r, gouv, int(pers), float(surface), ancien, actuel,
-                                                        int(jours), mois, precedente)
-                if enregistrer:
-                    ajouter_foyer(r, gouv, int(pers), surface, ancien, actuel, int(jours), mois)
+                                                        int(jours), mois, precedente, int(nb_mois), budget)
+                if enregistrer and len(historique_foyer(r, gouv, int(pers), surface)) == len(
+                        historique_foyer(r, gouv, int(pers), surface, exclure=(ancien, actuel, int(jours), mois))):
+                    ajouter_foyer(r, gouv, int(pers), surface, ancien, actuel, int(jours), mois)   # pas de doublon
             except ValueError as e:
                 st.session_state.pop("resultat", None)
                 st.error(f"Erreur : {e}")
@@ -212,53 +263,46 @@ with onglet_analyse:
             st.divider()
             afficher_resultats(st.session_state["resultat"])
 
-    # ---------------- import d'un fichier ----------------
     else:
         st.write("Importez un fichier Excel ou CSV (un foyer par ligne) avec les colonnes : "
-                 + ", ".join(f"`{c}`" for c in COLONNES_IMPORT) + " (`conso_precedente` est facultative).")
-        modele = pd.DataFrame([
-            ["Eau", GOUV[0], 4, 150, 1000, 1040, 60, 8, 40],
-            ["Electricité", GOUV[0], 4, 150, 5000, 5240, 60, 8, 360]], columns=COLONNES_IMPORT)
+                 + ", ".join(f"`{c}`" for c in OBLIGATOIRES) + ". Facultatives : " + ", ".join(f"`{c}`" for c in FACULTATIVES) + ".")
+        modele = pd.DataFrame([["Eau", GOUV[0], 4, 150, 1000, 1040, 3, "2025-08-01", "2025-10-31"],
+                               ["Electricité", GOUV[0], 4, 150, 5000, 5240, 2, "2025-08-01", "2025-09-30"]],
+                              columns=OBLIGATOIRES + ["nb_mois", "date_debut", "date_fin"])
         st.download_button("Télécharger le modèle de fichier (Excel)", en_xlsx(modele, "Modele"),
                            file_name="modele_import.xlsx", mime=XLSX)
         fichier = st.file_uploader("Votre fichier", type=["xlsx", "csv"])
         if fichier is not None:
             try:
-                if fichier.name.lower().endswith(".csv"):
-                    brut = pd.read_csv(io.BytesIO(fichier.getvalue()), sep=None, engine="python")
-                else:
-                    brut = pd.read_excel(io.BytesIO(fichier.getvalue()))
+                contenu = io.BytesIO(fichier.getvalue())
+                brut = pd.read_csv(contenu, sep=None, engine="python") if fichier.name.lower().endswith(".csv") \
+                    else pd.read_excel(contenu)
                 brut.columns = [str(c).strip().lower() for c in brut.columns]
-                manquantes = [c for c in COLONNES_IMPORT[:-1] if c not in brut.columns]
+                if "index_nouveau" in brut.columns and "index_actuel" not in brut.columns:
+                    brut = brut.rename(columns={"index_nouveau": "index_actuel"})
+                manquantes = [c for c in OBLIGATOIRES if c not in brut.columns]
                 if manquantes:
                     st.error(f"Colonnes manquantes : {manquantes}")
                 else:
                     lignes, details = [], {}
                     for i, row in brut.iterrows():
                         try:
-                            ress = normaliser_ressource(row["ressource"])
-                            if ress is None:
-                                raise ValueError("Ressource inconnue (Eau ou Electricité).")
-                            if row["gouvernorat"] not in GOUV:
-                                raise ValueError(f"Gouvernorat inconnu. Choisissez parmi : {GOUV}")
-                            prec = row.get("conso_precedente", np.nan)
-                            prec = None if pd.isna(prec) else float(str(prec).replace(",", "."))
-                            res = analyser(ress, row["gouvernorat"], int(row["nb_personnes"]),
-                                           float(row["superficie_m2"]), float(row["index_ancien"]),
-                                           float(row["index_actuel"]), int(row["jours_ecoules"]),
-                                           int(row["mois_actuel"]), prec)
+                            res = analyser_ligne(row)
                             details[i + 1] = res
-                            u = UNITE[ress]
-                            lignes.append({"Foyer": i + 1, "Ressource": ress, "Gouvernorat": row["gouvernorat"],
-                                           "Conso projetée (3 mois)": f"{res['r1']['conso_projetee_periode']} {u}",
+                            lignes.append({"Foyer": i + 1, "Ressource": res["r"], "Gouvernorat": res["gouv"],
+                                           "Conso projetée (période)": f"{res['r1']['conso_projetee_periode']} {UNITE[res['r']]} / {res['nb_mois']} mois",
                                            "Facture estimée (DT)": res["r1"]["facture_estimee_DT"],
                                            "Niveau": res["r2"]["niveau"],
-                                           "Alertes": " | ".join(a.strip() for a in res["r3"]), "Erreur": ""})
+                                           "Alertes": " | ".join("Tout va bien" if "Tout va bien" in a else a.strip() for a in res["r2"]["alertes"]),
+                                           "Budget": res["r4"]["resume"] if res["r4"] else "",
+                                           "Erreur": ""})
                         except Exception as e:
                             lignes.append({"Foyer": i + 1, "Ressource": row.get("ressource", ""),
                                            "Gouvernorat": row.get("gouvernorat", ""), "Erreur": str(e)})
                     tableau = pd.DataFrame(lignes).fillna("")
                     st.dataframe(tableau, hide_index=True)
+                    total = sum(x["r1"]["facture_estimee_DT"] for x in details.values())
+                    st.markdown(f"**Total estimé pour {len(details)} foyer(s) : {round(total, 1)} DT**")
                     st.download_button("Télécharger les résultats (Excel)", en_xlsx(tableau, "Resultats"),
                                        file_name="resultats_foyers.xlsx", mime=XLSX)
                     if details:
@@ -267,272 +311,6 @@ with onglet_analyse:
                         afficher_resultats(details[choix], cle="import")
             except Exception as e:
                 st.error(f"Impossible de lire le fichier : {e}")
-
-
-
-# ONGLET 2 : TABLEAU DE BORD
-COUL_RES = {"Eau": ACCENT, "Electricité": ORANGE}
-MOYENNE = dict(marker="D", markerfacecolor="white", markeredgecolor=BRUN, markersize=5)
-
-
-def fr(x, d=1):
-    """Nombre avec virgule décimale (12.5 -> '12,5')."""
-    return f"{x:.{d}f}".replace(".", ",")
-
-
-def iqr_out(s, k=1.5):
-    """True pour les valeurs hors de [Q1 - k*IQR ; Q3 + k*IQR]."""
-    q1, q3 = s.quantile([.25, .75])
-    return (s < q1 - k * (q3 - q1)) | (s > q3 + k * (q3 - q1))
-
-
-def zrob(s):
-    """z-score robuste (basé sur la médiane)."""
-    return 0.6745 * (s - s.median()) / np.median(np.abs(s - s.median()))
-
-
-@st.cache_data
-def preparer_analyse():
-    """Ajoute les colonnes d'analyse aux données propres et repère les consommations inhabituelles."""
-    df = DF_PROPRE.copy()
-    df["conso_totale"] = df["conso_periode"]
-    df["conso_par_personne"] = df["conso_mensuelle"] / df["nb_personnes_est"]
-    df["prix_unitaire"] = df["montant_facture_dt"] / df["conso_totale"]
-    df["date_milieu"] = df["date_debut"] + (df["date_fin"] - df["date_debut"]) / 2
-    df["saison"] = df["mois"].map(lambda m: "Hiver" if m in (12, 1, 2) else "Printemps" if m in (3, 4, 5)
-                                  else "Eté" if m in (6, 7, 8) else "Automne")
-    df["taille_foyer"] = pd.cut(df["nb_personnes_est"], [0, 2, 4, np.inf], labels=["1-2 pers.", "3-4 pers.", "5+ pers."])
-    df["surface"] = pd.cut(df["superficie_m2_est"], [0, 120, 200, np.inf], labels=["<120 m²", "120-200", ">200 m²"])
-    groupes = {r: df[df["ressource"] == r].copy() for r in RESSOURCES}
-    for g in groupes.values():
-        g["anomalie"] = (iqr_out(g["conso_mensuelle"]) | (zrob(g["conso_mensuelle"]).abs() > 3.5)
-                         | iqr_out(g["conso_par_personne"]))
-    return groupes
-
-
-def panneau():
-    """Cadre arrondi autour d'un élément (aspect « carte » d'un tableau de bord)."""
-    try:
-        return st.container(border=True)
-    except TypeError:                          # ancienne version de Streamlit
-        return st.container()
-
-
-def montrer(fig):
-    """Affiche une figure matplotlib dans un panneau, puis la ferme."""
-    with panneau():
-        st.pyplot(fig)
-    plt.close(fig)
-
-
-# --- graphiques
-def fig_ligne(serie, titre, ylabel, couleur):
-    fig, a = plt.subplots(figsize=(5.4, 3.4))
-    a.plot(serie.index, serie.values, marker="o", color=couleur)
-    a.set(title=titre, ylabel=ylabel)
-    a.xaxis.set_major_locator(MaxNLocator(integer=True))
-    fig.tight_layout()
-    return fig
-
-
-def fig_distribution(d, nom, u):
-    fig, a = plt.subplots(figsize=(5.4, 3.4))
-    s = d["conso_mensuelle"]
-    sns.histplot(s, kde=s.nunique() > 1, color=COUL_RES[nom], ax=a)
-    a.axvline(s.mean(), color=BRUN, ls="--", label=f"moyenne = {fr(s.mean())}")
-    a.axvline(s.median(), color=VERT, ls="--", label=f"médiane = {fr(s.median())}")
-    a.set(title="Distribution de la consommation", xlabel=f"{u}/mois", ylabel="Effectif")
-    a.legend(fontsize=8)
-    fig.tight_layout()
-    return fig
-
-
-def fig_top10(d, u):
-    fig, a = plt.subplots(figsize=(5.4, 3.4))
-    top = d.groupby("foyer_ref").conso_mensuelle.mean().nlargest(10).sort_values()
-    a.barh(top.index.astype(str), top.values, color=C_HIST)
-    a.set(title="10 plus gros consommateurs", xlabel=f"{u}/mois")
-    fig.tight_layout()
-    return fig
-
-
-def fig_comparaison(compare):
-    fig, a = plt.subplots(figsize=(5.4, 3.4))
-    a.bar(list(compare.keys()), list(compare.values()), color=[COUL_RES[n] for n in compare])
-    a.set(title="Facture moyenne par mois : eau et électricité", ylabel="DT/mois")
-    fig.tight_layout()
-    return fig
-
-
-def tableau_indicateurs(d, u):
-    """Indicateurs statistiques de la consommation mensuelle."""
-    s = d["conso_mensuelle"]
-    lignes = [("Relevés", fr(len(s), 0)), ("Moyenne", fr(s.mean())), ("Médiane", fr(s.median())),
-              ("Ecart-type", fr(s.std())), ("CV (%)", fr(s.std() / s.mean() * 100)), ("Minimum", fr(s.min())),
-              ("1er quartile", fr(s.quantile(.25))), ("3e quartile", fr(s.quantile(.75))), ("Maximum", fr(s.max()))]
-    return pd.DataFrame(lignes, columns=["Indicateur", f"Valeur ({u}/mois)"])
-
-
-def boite(a, src, x, ordre, titre, couleur, ylabel=""):
-    """Boîte à moustaches de la consommation selon une catégorie (◆ = moyenne)."""
-    a.set_title(titre)
-    if src.empty:
-        a.text(0.5, 0.5, "Pas de données", ha="center", va="center", transform=a.transAxes)
-        a.set_xticks([]); a.set_yticks([])
-        return
-    sns.boxplot(data=src, x=x, y="conso_mensuelle", order=ordre, color=couleur, ax=a,
-                showmeans=True, meanprops=MOYENNE, fliersize=2.5, linewidth=.9)
-    a.set(xlabel="", ylabel=ylabel)
-    a.tick_params(axis="x", labelsize=8)
-
-
-def fig_profils(d, nom, u):
-    nb = d["gouvernorat"].value_counts()
-    nom_g = {g: f"{g}\n(n={nb[g]})" for g in nb.index}              # le nombre de relevés est affiché sous le nom
-    d = d.assign(gouv_n=d["gouvernorat"].map(nom_g))
-    fig, ax = plt.subplots(2, 2, figsize=(11, 6.8))
-    c = COUL_RES[nom]
-    boite(ax[0, 0], d, "gouv_n", [nom_g[g] for g in sorted(nb.index)], "Par gouvernorat", c, f"{u}/mois")
-    boite(ax[0, 1], d, "taille_foyer", None, "Par taille du foyer", c)
-    boite(ax[1, 0], d, "surface", None, "Par surface", c, f"{u}/mois")
-    boite(ax[1, 1], d[d["nb_mois"] <= 4], "saison", ["Hiver", "Printemps", "Eté", "Automne"], "Par saison", c)
-    fig.tight_layout()
-    return fig
-
-
-def fig_relations(d, nom, u):
-    noms = {"superficie_m2_est": "Superf.", "nb_personnes_est": "Nb pers.",
-            "conso_mensuelle": "Conso", "montant_facture_dt": "Facture"}
-    fig, ax = plt.subplots(2, 2, figsize=(11, 7))
-    corr = d[list(noms)].rank().corr().rename(index=noms, columns=noms)          # corrélation de Spearman
-    sns.heatmap(corr, annot=True, fmt=".2f", cmap="BrBG", vmin=-1, vmax=1, cbar=False,
-                annot_kws={"size": 9}, ax=ax[0, 0])
-    ax[0, 0].set_title("Corrélations (Spearman)")
-    nuages = [(ax[0, 1], "nb_personnes_est", "conso_mensuelle", "Nb personnes", f"{u}/mois", "Consommation selon le nombre de personnes"),
-              (ax[1, 0], "superficie_m2_est", "conso_mensuelle", "Superficie (m²)", f"{u}/mois", "Consommation selon la superficie"),
-              (ax[1, 1], "conso_totale", "montant_facture_dt", f"Consommation de la période ({u})", "Facture (DT)", "Facture selon la consommation")]
-    for a, x, y, xl, yl, tt in nuages:
-        try:
-            sns.regplot(data=d, x=x, y=y, x_jitter=0.15 if x == "nb_personnes_est" else 0, color=COUL_RES[nom],
-                        scatter_kws={"alpha": .3, "s": 9}, line_kws={"color": BRUN, "lw": 1.5}, ax=a)
-            a.set(title=f"{tt}\nR² = {fr(np.corrcoef(d[x], d[y])[0, 1] ** 2, 2)}", xlabel=xl, ylabel=yl)
-        except Exception:                                                   # ex. : une seule valeur après filtrage
-            a.set(title=tt)
-            a.text(0.5, 0.5, "Pas assez de variation", ha="center", va="center", transform=a.transAxes)
-        a.title.set_fontsize(10)
-    fig.tight_layout()
-    return fig
-
-
-def fig_anomalies(d, nom, u):
-    fig, a = plt.subplots(figsize=(6.4, 4.2))
-    normal, inhab = d[~d["anomalie"]], d[d["anomalie"]]
-    a.scatter(normal["date_milieu"], normal["conso_mensuelle"], s=10, alpha=.4, color=COUL_RES[nom], label="normal")
-    a.scatter(inhab["date_milieu"], inhab["conso_mensuelle"], s=45, color=BRUN, edgecolor="k",
-              label=f"inhabituel : {len(inhab)} ({fr(len(inhab) / len(d) * 100)} %)")
-    a.set(title="Consommations dans le temps", ylabel=f"{u}/mois")
-    a.legend(fontsize=8)
-    a.tick_params(axis="x", rotation=30)            # dates lisibles
-    fig.tight_layout()
-    return fig
-
-
-# ------------ page
-def tableau_de_bord(GR):
-    # ---- barre de filtres  ----
-    with panneau():
-        c1, c2, c3, c4 = st.columns(4)
-        r = c1.radio("Ressource", RESSOURCES, key="dash_ress", horizontal=True,
-             format_func=lambda x: f"{x} ({FOURNISSEUR.get(x, '')})")
-        base, u = GR[r], UNITE[r]
-        a_min, a_max = int(base.date_debut.dt.year.min()), int(base.date_debut.dt.year.max())
-        p_min, p_max = int(base.nb_personnes_est.min()), int(base.nb_personnes_est.max())
-        gouvs = c2.multiselect("Gouvernorat", GOUV, default=GOUV, key="dash_gouv")
-        periode = c3.slider("Période (années)", a_min, a_max, (a_min, a_max), key=f"dash_per_{r}") if a_min < a_max else (a_min, a_max)
-        nb_pers = c4.slider("Nombre de personnes", p_min, p_max, (p_min, p_max), key=f"dash_pers_{r}") if p_min < p_max else (p_min, p_max)
-
-    def filtrer(donnees):
-        return donnees[donnees.gouvernorat.isin(gouvs)
-                       & donnees.date_debut.dt.year.between(*periode)
-                       & donnees.nb_personnes_est.between(*nb_pers)]
-
-    d = filtrer(base)
-    if d.empty:
-        st.warning("Aucune donnée pour ces filtres.")
-        return
-    if len(d) < 5:
-        st.info("Pas assez de relevés pour ces filtres : élargissez la sélection.")
-        return
-    d = d.assign(annee=d.date_debut.dt.year, facture_mois=d.montant_facture_dt / d.nb_mois)
-
-    # ---- chiffres clés ----
-    prix = d.montant_facture_dt.sum() / d.conso_periode.sum()
-    nb_inhab = int(d.anomalie.sum())
-    k1, k2, k3, k4, k5 = st.columns(5)
-    with k1:
-        carte("Consommation moyenne", f"{d.conso_mensuelle.mean():.1f} {u}", "par mois")
-    with k2:
-        carte("Facture moyenne", f"{d.facture_mois.mean():.1f} DT", "par mois")
-    with k3:
-        carte("Prix moyen", f"{prix:.3f} DT", f"par {u}")
-    with k4:
-        carte("Foyers", d.foyer_ref.nunique(), f"{len(d)} relevés")
-    with k5:
-        carte("Inhabituelles", nb_inhab, f"{nb_inhab / len(d) * 100:.1f} % des relevés")
-    st.write("")
-
-    t_apercu, t_profils, t_relations, t_inhab = st.tabs(["Aperçu", "Profils", "Relations", "Inhabituelles"])
-
-    with t_apercu:
-        g1, g2 = st.columns(2)
-        with g1:
-            montrer(fig_ligne(d.groupby("annee").conso_mensuelle.mean(), "Consommation moyenne par année",f"{u}/mois", C_GOUV))                     
-        with g2:
-            montrer(fig_ligne(d.groupby("annee").facture_mois.mean(), "Facture moyenne par mois, par année","DT/mois", C_PERS))                
-        g1, g2 = st.columns(2)
-        with g1:
-            montrer(fig_distribution(d, r, u))
-        with g2:
-            montrer(fig_top10(d, u))
-        g1, g2 = st.columns(2)
-        with g1:
-            compare = {nom: (f.montant_facture_dt / f.nb_mois).mean() for nom, donnees in GR.items()
-                       for f in [filtrer(donnees)] if len(f)}
-            montrer(fig_comparaison(compare))
-        with g2:
-            with panneau():
-                st.dataframe(tableau_indicateurs(d, u), hide_index=True, height=330)
-
-    with t_profils:
-        montrer(fig_profils(d, r, u))
-
-    with t_relations:
-        montrer(fig_relations(d, r, u))
-
-    with t_inhab:
-        g1, g2 = st.columns([3, 2])
-        with g1:
-            montrer(fig_anomalies(d, r, u))
-        liste = (d[d.anomalie].sort_values("conso_mensuelle", ascending=False)
-                 [["foyer_ref", "gouvernorat", "nb_personnes_est", "date_debut", "conso_mensuelle"]]
-                 .rename(columns={"foyer_ref": "Foyer", "gouvernorat": "Gouvernorat", "nb_personnes_est": "Personnes",
-                                  "date_debut": "Début", "conso_mensuelle": f"Conso ({u}/mois)"}))
-        liste["Début"] = liste["Début"].dt.strftime("%m/%Y")
-        with g2:
-            with panneau():
-                if len(liste):
-                    st.dataframe(liste, hide_index=True, height=330)
-                    st.download_button("Télécharger la liste (CSV)", liste.to_csv(index=False, sep=";").encode("utf-8-sig"),
-                                       file_name="consommations_inhabituelles.csv", mime="text/csv")
-                else:
-                    st.info("Aucune consommation inhabituelle pour ces filtres.")
-
-with onglet_dash:
-    with sns.axes_style("whitegrid"):
-        tableau_de_bord(preparer_analyse())
-
-
-# ONGLET 3 : HISTORIQUE (foyers enregistrés par collecte.py)
 
 with onglet_historique:
     chemin = os.path.join(dossier_utilisateur(), FICHIER_SAISIES)
