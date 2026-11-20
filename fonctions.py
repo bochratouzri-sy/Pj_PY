@@ -104,8 +104,8 @@ def fonction2(ressource, nb_pers, surface, gouv, ma_conso_mensuelle, conso_prece
 
 
 
-# ===================== fonction 4 : budget =====================
-def fonction4(ressource, budget, conso_periode, nb_mois=3):
+# ===================== fonction 3 : budget =====================
+def fonction3(ressource, budget, conso_periode, nb_mois=3):
     """Compare la facture projetée à un budget (DT) et dit de combien réduire pour le respecter."""
     u = UNITE[ressource]
     facture = _facture(ressource, conso_periode, nb_mois)
