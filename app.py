@@ -13,10 +13,10 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 import streamlit as st
 
-st.set_page_config(page_title="Suivi de consommation", page_icon="logo.png", layout="wide")
+st.set_page_config(page_title="Suivi de consommation", page_icon="💧", layout="wide")
 
 from donnees import D, GOUV, UNITE
-from fonctions import fonction1, fonction2, fonction4, MOIS
+from fonctions import fonction1, fonction2, fonction3, MOIS
 from collecte import ajouter_foyer, FOURNISSEUR, FICHIER_SAISIES, dossier_utilisateur
 
 RESSOURCES = list(D.keys())                     # ["Eau", "Electricité"]
@@ -85,7 +85,7 @@ def analyser(r, gouv, pers, surface, ancien, actuel, jours, mois, precedente=Non
     r1 = fonction1(r, ancien, actuel, jours, nb_mois)
     conso_mensuelle = round(r1["conso_projetee_periode"] / nb_mois, 1)
     r2 = fonction2(r, pers, surface, gouv, conso_mensuelle, precedente / nb_mois if precedente is not None else None, nb_mois)
-    r4 = fonction4(r, budget, r1["conso_projetee_periode"], nb_mois) if budget is not None else None
+    r4 = (r, budget, r1["conso_projetee_periode"], nb_mois) if budget is not None else None
     return {"r": r, "gouv": gouv, "pers": pers, "surface": surface, "r1": r1, "r2": r2, "r4": r4,
             "ancien": ancien, "actuel": actuel, "jours": jours, "mois": mois, "nb_mois": nb_mois}
 
@@ -99,7 +99,10 @@ def historique_foyer(r, gouv, pers, surface, exclure=None):
     chemin = os.path.join(dossier_utilisateur(), FICHIER_SAISIES)
     if not os.path.exists(chemin):
         return pd.DataFrame(columns=["mois", "conso_mensuelle"])
-    h = pd.read_csv(chemin)
+    try:
+        h = pd.read_csv(chemin)
+    except (PermissionError, pd.errors.EmptyDataError):
+        return pd.DataFrame(columns=["mois", "conso_mensuelle"])
     h = h[(h.ressource == r) & (h.gouvernorat == gouv) & (h.nb_personnes == pers) & (h.superficie_m2 == surface)]
     h = h.drop_duplicates(["index_ancien", "index_actuel", "jours_ecoules", "mois"], keep="last")
     if exclure is not None:
@@ -138,7 +141,7 @@ def afficher_resultats(res, cle="saisie"):
     r1, r2, r4 = res["r1"], res["r2"], res["r4"]
     fourchette = f"entre {r1['facture_min_DT']} et {r1['facture_max_DT']} DT"
 
-   ## st.markdown(f"### Résultats : {r} ({FOURNISSEUR.get(r, '')}), {res['gouv']}, {res['pers']} pers., {res['surface']} m²")
+    st.markdown(f"### Résultats : {r} ({FOURNISSEUR.get(r, '')}), {res['gouv']}, {res['pers']} pers., {res['surface']} m²")
 
     st.markdown("#### 1. Où j'en suis ?")
     st.markdown(f'<div class="phrase">À ce rythme, vous consommerez <b>{r1["conso_projetee_periode"]} {u}</b> '
@@ -254,7 +257,11 @@ with onglet_analyse:
                                                         int(jours), mois, precedente, int(nb_mois), budget)
                 if enregistrer and len(historique_foyer(r, gouv, int(pers), surface)) == len(
                         historique_foyer(r, gouv, int(pers), surface, exclure=(ancien, actuel, int(jours), mois))):
-                    ajouter_foyer(r, gouv, int(pers), surface, ancien, actuel, int(jours), mois)   # pas de doublon
+                    try:
+                        ajouter_foyer(r, gouv, int(pers), surface, ancien, actuel, int(jours), mois)   # pas de doublon
+                    except PermissionError:
+                        st.warning("Le calcul est fait, mais l'historique n'a pas pu être enregistré : le fichier "
+                                   f"{FICHIER_SAISIES} est probablement ouvert dans Excel. Fermez-le puis recalculez.")
             except ValueError as e:
                 st.session_state.pop("resultat", None)
                 st.error(f"Erreur : {e}")
@@ -315,10 +322,13 @@ with onglet_analyse:
 with onglet_historique:
     chemin = os.path.join(dossier_utilisateur(), FICHIER_SAISIES)
     if os.path.exists(chemin):
-        saisies = pd.read_csv(chemin)
-        st.write(f"{len(saisies)} foyer(s) enregistré(s).")
-        st.dataframe(saisies, hide_index=True)
-        st.download_button("Télécharger l'historique (Excel)", en_xlsx(saisies, "Historique"),
-                           file_name="foyers_saisis.xlsx", mime=XLSX)
+        try:
+            saisies = pd.read_csv(chemin)
+            st.write(f"{len(saisies)} foyer(s) enregistré(s).")
+            st.dataframe(saisies, hide_index=True)
+            st.download_button("Télécharger l'historique (Excel)", en_xlsx(saisies, "Historique"),
+                               file_name="foyers_saisis.xlsx", mime=XLSX)
+        except PermissionError:
+            st.warning(f"Impossible de lire {FICHIER_SAISIES} : fermez-le s'il est ouvert dans Excel, puis rechargez la page.")
     else:
-        st.info("Aucun foyer enregistré pour le moment. Faites une analyse dans « Mon analyse ».")
+        st.info("Aucun foyer enregistré pour le moment. Faites une analyse dans « Mon analyse »."
