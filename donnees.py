@@ -56,4 +56,3 @@ def profil(nb_pers, surface, gouv):
 D = {r: df[df.ressource == r].copy() for r in sorted(df.ressource.unique())}
 P = {r: np.array([profil(x.nb_personnes_est, x.superficie_m2_est, x.gouvernorat) for x in d.itertuples()], dtype=float)
      for r, d in D.items()}
-
