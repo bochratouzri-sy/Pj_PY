@@ -5,8 +5,6 @@ import pandas as pd
 
 from donnees import D, P, GOUV, UNITE, profil
 
-
-
 # ===================== fonction 1 =====================
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import cross_val_score
@@ -59,9 +57,6 @@ def fonction1(ressource, index_ancien, index_actuel, jours_ecoules, nb_mois=3):
             "facture_min_DT": round(max(facture + bas * mult, 0), 1), "facture_max_DT": round(facture + haut * mult, 1),
             "economie_si_-10%_DT": round(facture - facture_10, 1), "nb_mois": nb_mois}
 
-
-
-
 # ===================== fonction 2 =====================
 M_CONSO = {}
 for r, d in D.items():
@@ -100,8 +95,6 @@ def fonction2(ressource, nb_pers, surface, gouv, ma_conso_mensuelle, conso_prece
     return {"foyers_semblables": round(normal, 1), "ma_conso": ma_conso_mensuelle, "niveau": niveau,
             "objectif": round(min(normal, ma_conso_mensuelle), 1),
             "alertes": alertes or ["Tout va bien : votre consommation est normale et stable. Continuez ainsi !"]}
-
-
 
 
 # ===================== fonction 3 : budget =====================
