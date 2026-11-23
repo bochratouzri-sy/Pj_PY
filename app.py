@@ -13,7 +13,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 import streamlit as st
 
-st.set_page_config(page_title="Suivi de consommation", page_icon="💧", layout="wide")
+st.set_page_config(page_title="Suivi de consommation", page_icon="logo.png", layout="wide")
 
 from donnees import D, GOUV, UNITE
 from fonctions import fonction1, fonction2, fonction3, MOIS
@@ -331,4 +331,4 @@ with onglet_historique:
         except PermissionError:
             st.warning(f"Impossible de lire {FICHIER_SAISIES} : fermez-le s'il est ouvert dans Excel, puis rechargez la page.")
     else:
-        st.info("Aucun foyer enregistré pour le moment. Faites une analyse dans « Mon analyse »."
+        st.info("Aucun foyer enregistré pour le moment. Faites une analyse dans « Mon analyse ».")
