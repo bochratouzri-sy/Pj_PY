@@ -85,7 +85,7 @@ def analyser(r, gouv, pers, surface, ancien, actuel, jours, mois, precedente=Non
     r1 = fonction1(r, ancien, actuel, jours, nb_mois)
     conso_mensuelle = round(r1["conso_projetee_periode"] / nb_mois, 1)
     r2 = fonction2(r, pers, surface, gouv, conso_mensuelle, precedente / nb_mois if precedente is not None else None, nb_mois)
-    r4 = (r, budget, r1["conso_projetee_periode"], nb_mois) if budget is not None else None
+    r4 = fonction3(r, budget, r1["conso_projetee_periode"], nb_mois) if budget is not None else None
     return {"r": r, "gouv": gouv, "pers": pers, "surface": surface, "r1": r1, "r2": r2, "r4": r4,
             "ancien": ancien, "actuel": actuel, "jours": jours, "mois": mois, "nb_mois": nb_mois}
 
